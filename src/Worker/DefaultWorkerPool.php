@@ -186,12 +186,14 @@ final class DefaultWorkerPool implements WorkerPool
     
     private static function shutdownWorkers(\SplObjectStorage $workers, ?DeferredFuture $waiting): void
     {
-        foreach ($workers as $worker) {
-            \assert($worker instanceof Worker);
-            if ($worker->isRunning()) {
-                $worker->shutdown();
+        (async(static function () use ($workers): void {
+            foreach ($workers as $worker) {
+                \assert($worker instanceof Worker);
+                if ($worker->isRunning()) {
+                    $worker->shutdown();
+                }
             }
-        }
+        }))->await();
 
         $waiting?->error(new WorkerException('The pool was killed before the task could be executed'));
     }
