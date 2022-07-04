@@ -74,9 +74,7 @@ final class DefaultWorkerPool implements WorkerPool
     public function __destruct()
     {
         if ($this->isRunning()) {
-            // self::killWorkers($this->workers, $this->waiting);
-            // self::shutdownWorkers($this->workers, $this->waiting);
-            (async(fn() => $this->shutdown() ))->await();
+            self::killWorkers($this->workers, $this->waiting);
         }
     }
 
@@ -181,20 +179,6 @@ final class DefaultWorkerPool implements WorkerPool
                 $worker->kill();
             }
         }
-
-        $waiting?->error(new WorkerException('The pool was killed before the task could be executed'));
-    }
-    
-    private static function shutdownWorkers(\SplObjectStorage $workers, ?DeferredFuture $waiting): void
-    {
-        (async(static function () use ($workers): void {
-            foreach ($workers as $worker) {
-                \assert($worker instanceof Worker);
-                if ($worker->isRunning()) {
-                    $worker->shutdown();
-                }
-            }
-        }))->await();
 
         $waiting?->error(new WorkerException('The pool was killed before the task could be executed'));
     }
