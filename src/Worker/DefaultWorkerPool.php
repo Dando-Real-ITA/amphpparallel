@@ -76,7 +76,7 @@ final class DefaultWorkerPool implements WorkerPool
         if ($this->isRunning()) {
             // self::killWorkers($this->workers, $this->waiting);
             // self::shutdownWorkers($this->workers, $this->waiting);
-            $this->shutdown();
+            (async(fn() => { $this->shutdown() })->await();
         }
     }
 
