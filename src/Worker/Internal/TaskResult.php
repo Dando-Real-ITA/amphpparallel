@@ -1,11 +1,11 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Worker\Internal;
 
 /**
  * @internal
  *
- * @template T
+ * @template-covariant T
  */
 abstract class TaskResult extends JobPacket
 {

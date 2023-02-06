@@ -1,14 +1,19 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Ipc;
 
 use Amp\Cancellation;
+use Amp\ForbidCloning;
+use Amp\ForbidSerialization;
 use Amp\Socket;
 use Amp\Socket\ResourceSocket;
 use const Amp\Process\IS_WINDOWS;
 
 final class LocalIpcHub implements IpcHub
 {
+    use ForbidCloning;
+    use ForbidSerialization;
+
     private readonly SocketIpcHub $delegate;
 
     private ?string $toUnlink = null;
@@ -24,15 +29,15 @@ final class LocalIpcHub implements IpcHub
         int $keyLength = SocketIpcHub::DEFAULT_KEY_LENGTH,
     ) {
         if (IS_WINDOWS) {
-            $uri = "tcp://127.0.0.1:0";
+            $address = new Socket\InternetAddress('127.0.0.1', 0);
         } else {
             $suffix = \bin2hex(\random_bytes(10));
             $path = \sys_get_temp_dir() . "/amp-parallel-ipc-" . $suffix . ".sock";
-            $uri = "unix://" . $path;
+            $address = new Socket\UnixAddress($path);
             $this->toUnlink = $path;
         }
 
-        $this->delegate = new SocketIpcHub(Socket\listen($uri), $keyReceiveTimeout, $keyLength);
+        $this->delegate = new SocketIpcHub(Socket\listen($address), $keyReceiveTimeout, $keyLength);
     }
 
     public function accept(string $key, ?Cancellation $cancellation = null): ResourceSocket

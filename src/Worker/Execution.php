@@ -1,18 +1,23 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Worker;
 
+use Amp\ForbidCloning;
+use Amp\ForbidSerialization;
 use Amp\Future;
 use Amp\Sync\Channel;
 
 /**
- * @template TResult
+ * @template-covariant TResult
  * @template TReceive
  * @template TSend
  * @template TCache
  */
 final class Execution
 {
+    use ForbidCloning;
+    use ForbidSerialization;
+
     /**
      * @param Task<TResult, TReceive, TSend, TCache> $task
      * @param Channel<TSend, TReceive> $channel

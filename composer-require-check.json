@@ -17,6 +17,7 @@
         "void",
         "never",
         "object",
+        "random_bytes",
         "readKey",
         "flattenArgument",
         "formatFlattenedBacktrace",
@@ -35,6 +36,7 @@
         "Reflection",
         "SPL",
         "standard",
-        "hash"
+        "hash",
+        "pcntl"
     ]
 }

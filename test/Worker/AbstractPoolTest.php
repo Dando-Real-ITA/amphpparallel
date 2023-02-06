@@ -1,8 +1,7 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Test\Worker;
 
-use Amp\Cache\LocalCache;
 use Amp\Future;
 use Amp\Parallel\Context\StatusError;
 use Amp\Parallel\Worker\DefaultWorkerFactory;
@@ -10,7 +9,6 @@ use Amp\Parallel\Worker\DefaultWorkerPool;
 use Amp\Parallel\Worker\Task;
 use Amp\Parallel\Worker\Worker;
 use Amp\Parallel\Worker\WorkerPool;
-use Revolt\EventLoop;
 
 abstract class AbstractPoolTest extends AbstractWorkerTest
 {
@@ -20,14 +18,18 @@ abstract class AbstractPoolTest extends AbstractWorkerTest
         $this->expectNotToPerformAssertions();
     }
 
-    public function testShutdownShouldReturnSameResult(): void
+    public function testMultipleShutdownCalls(): void
     {
         $pool = $this->createPool();
 
         self::assertTrue($pool->isIdle());
+        self::assertTrue($pool->isRunning());
 
-        $result = $pool->shutdown();
-        self::assertSame($result, $pool->shutdown());
+        $pool->shutdown();
+
+        self::assertFalse($pool->isRunning());
+
+        $pool->shutdown();
     }
 
     public function testPullShouldThrowStatusError(): void
@@ -126,36 +128,32 @@ abstract class AbstractPoolTest extends AbstractWorkerTest
 
     public function testPooledKill(): void
     {
-        EventLoop::setErrorHandler(function (\Throwable $exception): void {
-            $this->assertStringContainsString("Worker in pool crashed", $exception->getMessage());
-        });
-
         $this->setTimeout(1);
 
         // See https://github.com/amphp/parallel/issues/66
         $pool = $this->createPool(1);
         $worker1 = $pool->getWorker();
         $worker1->kill();
+        self::assertFalse($worker1->isRunning());
 
-        unset($worker1);
+        unset($worker1); // Destroying the worker will trigger the pool to recognize it has been killed.
 
         $worker2 = $pool->getWorker();
+        self::assertTrue($worker2->isRunning());
     }
 
-    protected function createWorker(string $cacheClass = LocalCache::class, ?string $autoloadPath = null): Worker
+    protected function createWorker(?string $autoloadPath = null): Worker
     {
-        return $this->createPool(cacheClass: $cacheClass, autoloadPath: $autoloadPath);
+        return $this->createPool(autoloadPath: $autoloadPath);
     }
 
     protected function createPool(
         int $max = WorkerPool::DEFAULT_WORKER_LIMIT,
-        string $cacheClass = LocalCache::class,
         ?string $autoloadPath = null
     ): WorkerPool {
         $factory = new DefaultWorkerFactory(
             bootstrapPath: $autoloadPath,
             contextFactory: $this->createContextFactory(),
-            cacheClass: $cacheClass,
         );
 
         return new DefaultWorkerPool($max, $factory);

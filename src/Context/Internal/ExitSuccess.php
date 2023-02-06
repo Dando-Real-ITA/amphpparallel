@@ -1,11 +1,11 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Context\Internal;
 
 /**
  * @internal
- * @template TValue
- * @template-implements ExitResult<TValue>
+ * @template-covariant TValue
+ * @implements ExitResult<TValue>
  */
 final class ExitSuccess implements ExitResult
 {

@@ -1,9 +1,13 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Worker;
 
 use Amp\Cancellation;
+use Amp\CancelledException;
+use Amp\DeferredCancellation;
 use Amp\DeferredFuture;
+use Amp\ForbidCloning;
+use Amp\ForbidSerialization;
 use Amp\Future;
 use Amp\Parallel\Context\StatusError;
 use Revolt\EventLoop;
@@ -18,21 +22,27 @@ use function Amp\async;
  */
 final class DefaultWorkerPool implements WorkerPool
 {
+    use ForbidCloning;
+    use ForbidSerialization;
+
     /** @var bool Indicates if the pool is currently running. */
     private bool $running = true;
 
-    /** @var \SplObjectStorage A collection of all workers in the pool. */
+    /** @var \SplObjectStorage<Worker, int> A collection of all workers in the pool. */
     private readonly \SplObjectStorage $workers;
 
-    /** @var \SplQueue A collection of idle workers. */
+    /** @var \SplQueue<Worker> A collection of idle workers. */
     private readonly \SplQueue $idleWorkers;
 
-    private ?DeferredFuture $waiting = null;
+    /** @var \SplQueue<DeferredFuture<Worker|null>> Task submissions awaiting an available worker. */
+    private \SplQueue $waiting;
 
     /** @var \Closure(Worker):void */
     private readonly \Closure $push;
 
     private ?Future $exitStatus = null;
+
+    private readonly DeferredCancellation $deferredCancellation;
 
     /**
      * Creates a new worker pool.
@@ -45,29 +55,38 @@ final class DefaultWorkerPool implements WorkerPool
      * @throws \Error
      */
     public function __construct(
-        private int $limit = self::DEFAULT_WORKER_LIMIT,
-        private ?WorkerFactory $factory = null,
+        private readonly int $limit = self::DEFAULT_WORKER_LIMIT,
+        private readonly ?WorkerFactory $factory = null,
     ) {
         if ($limit < 0) {
             throw new \Error("Maximum size must be a non-negative integer");
         }
 
-        $this->workers = new \SplObjectStorage;
-        $this->idleWorkers = new \SplQueue;
+        $this->workers = new \SplObjectStorage();
+        $this->idleWorkers = new \SplQueue();
+        $this->waiting = new \SplQueue();
+
+        $this->deferredCancellation = new DeferredCancellation();
 
         $workers = $this->workers;
         $idleWorkers = $this->idleWorkers;
-        $waiting = &$this->waiting;
+        $waiting = $this->waiting;
 
-        $this->push = static function (Worker $worker) use (&$waiting, $workers, $idleWorkers): void {
-            /** @psalm-suppress InvalidArgument */
+        $this->push = static function (Worker $worker) use ($waiting, $workers, $idleWorkers): void {
             if (!$workers->contains($worker)) {
                 return;
             }
 
-            $idleWorkers->push($worker);
-            $waiting?->complete($worker);
-            $waiting = null;
+            if ($worker->isRunning()) {
+                $idleWorkers->push($worker);
+            } else {
+                $workers->detach($worker);
+                $worker = null;
+            }
+
+            if (!$waiting->isEmpty()) {
+                $waiting->dequeue()->complete($worker);
+            }
         };
     }
 
@@ -122,15 +141,15 @@ final class DefaultWorkerPool implements WorkerPool
         $push = $this->push;
 
         try {
-            $job = $worker->submit($task, $cancellation);
+            $execution = $worker->submit($task, $cancellation);
         } catch (\Throwable $exception) {
             $push($worker);
             throw $exception;
         }
 
-        $job->getResult()->finally(static fn () => $push($worker))->ignore();
+        $execution->getResult()->finally(static fn () => $push($worker))->ignore();
 
-        return $job;
+        return $execution;
     }
 
     /**
@@ -147,8 +166,11 @@ final class DefaultWorkerPool implements WorkerPool
 
         $this->running = false;
 
-        $this->waiting?->error(new WorkerException('The pool shut down before the task could be executed'));
-        $this->waiting = null;
+        while (!$this->waiting->isEmpty()) {
+            $this->waiting->dequeue()->error(
+                $exception ??= new WorkerException('The pool shut down before the task could be executed'),
+            );
+        }
 
         $workers = $this->workers;
         ($this->exitStatus = async(static function () use ($workers): void {
@@ -168,10 +190,13 @@ final class DefaultWorkerPool implements WorkerPool
     {
         $this->running = false;
         self::killWorkers($this->workers, $this->waiting);
-        $this->waiting = null;
     }
 
-    private static function killWorkers(\SplObjectStorage $workers, ?DeferredFuture $waiting): void
+    /**
+     * @param \SplObjectStorage<Worker, int> $workers
+     * @param \SplQueue<DeferredFuture<Worker|null>> $waiting
+     */
+    private static function killWorkers(\SplObjectStorage $workers, \SplQueue $waiting): void
     {
         foreach ($workers as $worker) {
             \assert($worker instanceof Worker);
@@ -180,7 +205,11 @@ final class DefaultWorkerPool implements WorkerPool
             }
         }
 
-        $waiting?->error(new WorkerException('The pool was killed before the task could be executed'));
+        while (!$waiting->isEmpty()) {
+            $waiting->dequeue()->error(
+                $exception ??= new WorkerException('The pool was killed before the task could be executed'),
+            );
+        }
     }
 
     public function getWorker(): Worker
@@ -203,25 +232,36 @@ final class DefaultWorkerPool implements WorkerPool
         do {
             if ($this->idleWorkers->isEmpty()) {
                 if ($this->getWorkerCount() < $this->limit) {
-                    // Max worker count has not been reached, so create another worker.
-                    $worker = ($this->factory ?? workerFactory())->create();
+                    try {
+                        // Max worker count has not been reached, so create another worker.
+                        $worker = ($this->factory ?? workerFactory())->create(
+                            $this->deferredCancellation->getCancellation(),
+                        );
+                    } catch (CancelledException) {
+                        throw new WorkerException('The pool shut down before the task could be executed');
+                    }
+
                     if (!$worker->isRunning()) {
                         throw new WorkerException('Worker factory did not create a viable worker');
                     }
+
                     $this->workers->attach($worker, 0);
                     return $worker;
                 }
 
-                if (!$this->waiting) {
-                    $this->waiting = new DeferredFuture;
-                }
+                /** @var DeferredFuture<Worker|null> $deferred */
+                $deferred = new DeferredFuture;
+                $this->waiting->enqueue($deferred);
 
-                do {
-                    $worker = $this->waiting->getFuture()->await();
-                } while ($this->waiting);
+                $worker = $deferred->getFuture()->await();
             } else {
                 // Shift a worker off the idle queue.
                 $worker = $this->idleWorkers->shift();
+            }
+
+            if ($worker === null) {
+                // Worker crashed when executing a Task, which should have failed.
+                continue;
             }
 
             \assert($worker instanceof Worker);
@@ -230,8 +270,7 @@ final class DefaultWorkerPool implements WorkerPool
                 return $worker;
             }
 
-            // Worker crashed; trigger error and remove it from the pool.
-
+            // Worker crashed while idle; trigger error and remove it from the pool.
             EventLoop::queue(static function () use ($worker): void {
                 try {
                     $worker->shutdown();
@@ -246,8 +285,5 @@ final class DefaultWorkerPool implements WorkerPool
 
             $this->workers->detach($worker);
         } while (true);
-
-        // Required for Psalm.
-        throw new \RuntimeException('Unreachable statement');
     }
 }

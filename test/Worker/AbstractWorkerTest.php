@@ -1,9 +1,8 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Test\Worker;
 
-use Amp\Cache\Cache;
-use Amp\Cache\LocalCache;
+use Amp\Cache\AtomicCache;
 use Amp\Cancellation;
 use Amp\Future;
 use Amp\Parallel\Context\ContextFactory;
@@ -24,7 +23,7 @@ use function Amp\delay;
 
 class NonAutoloadableTask implements Task
 {
-    public function run(Channel $channel, Cache $cache, Cancellation $cancellation): int
+    public function run(Channel $channel, AtomicCache $cache, Cancellation $cancellation): int
     {
         return 1;
     }
@@ -224,7 +223,7 @@ abstract class AbstractWorkerTest extends AsyncTestCase
 
         try {
             $worker->submit(new class implements Task { // Anonymous classes are not serializable.
-                public function run(Channel $channel, Cache $cache, Cancellation $cancellation): mixed
+                public function run(Channel $channel, AtomicCache $cache, Cancellation $cancellation): mixed
                 {
                     return null;
                 }
@@ -247,7 +246,7 @@ abstract class AbstractWorkerTest extends AsyncTestCase
         } catch (TaskFailureException $exception) {
             self::assertSame(
                 0,
-                \strpos($exception->getMessage(), "Uncaught Amp\Serialization\SerializationException in worker")
+                \strpos($exception->getMessage(), "Amp\Serialization\SerializationException thrown in context")
             );
         }
 
@@ -276,7 +275,7 @@ abstract class AbstractWorkerTest extends AsyncTestCase
         $worker = $this->createWorker();
 
         async(fn () => $worker->submit(new class implements Task { // Anonymous classes are not serializable.
-            public function run(Channel $channel, Cache $cache, Cancellation $cancellation): mixed
+            public function run(Channel $channel, AtomicCache $cache, Cancellation $cancellation): mixed
             {
                 return null;
             }
@@ -366,12 +365,11 @@ abstract class AbstractWorkerTest extends AsyncTestCase
         self::assertSame('out', $execution->getResult()->await($cancellation));
     }
 
-    protected function createWorker(string $cacheClass = LocalCache::class, ?string $autoloadPath = null): Worker
+    protected function createWorker(?string $autoloadPath = null): Worker
     {
         $factory = new DefaultWorkerFactory(
             bootstrapPath: $autoloadPath,
             contextFactory: $this->createContextFactory(),
-            cacheClass: $cacheClass,
         );
 
         return $factory->create();

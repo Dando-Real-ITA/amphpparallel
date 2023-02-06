@@ -1,10 +1,11 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace Amp\Parallel\Context\Internal;
 
 use Amp\ByteStream;
 use Amp\ByteStream\StreamChannel;
 use Amp\Future;
+use Amp\Parallel\Context\ProcessContext;
 use Amp\Parallel\Ipc;
 use Amp\Serialization\SerializationException;
 use Amp\TimeoutCancellation;
@@ -42,6 +43,18 @@ if (\function_exists("cli_set_process_title")) {
     require $autoloadPath;
 })();
 
+EventLoop::queue(function (): void {
+    $handler = fn () => null;
+
+    try {
+        foreach (ProcessContext::getIgnoredSignals() as $signal) {
+            EventLoop::unreference(EventLoop::onSignal($signal, $handler));
+        }
+    } catch (EventLoop\UnsupportedFeatureException) {
+        // Signal handling not supported on current event loop driver.
+    }
+});
+
 EventLoop::queue(function () use ($argc, $argv): void {
     /** @var list<string> $argv */
 
@@ -71,12 +84,8 @@ EventLoop::queue(function () use ($argc, $argv): void {
 
     try {
         $key = Ipc\readKey(ByteStream\getStdin(), $cancellation, $length);
-
         $socket = Ipc\connect($uri, $key, $cancellation);
-        $dataChannel = new StreamChannel($socket, $socket);
-
-        $socket = Ipc\connect($uri, $key, $cancellation);
-        $resultChannel = new StreamChannel($socket, $socket);
+        $channel = new StreamChannel($socket, $socket);
     } catch (\Throwable $exception) {
         \trigger_error($exception->getMessage(), E_USER_ERROR);
     }
@@ -114,7 +123,7 @@ EventLoop::queue(function () use ($argc, $argv): void {
             ), 0, $exception);
         }
 
-        $returnValue = $callable(new ContextChannel($dataChannel));
+        $returnValue = $callable(new ContextChannel($channel));
         $result = new ExitSuccess($returnValue instanceof Future ? $returnValue->await() : $returnValue);
     } catch (\Throwable $exception) {
         $result = new ExitFailure($exception);
@@ -122,10 +131,10 @@ EventLoop::queue(function () use ($argc, $argv): void {
 
     try {
         try {
-            $resultChannel->send($result);
+            $channel->send($result);
         } catch (SerializationException $exception) {
             // Serializing the result failed. Send the reason why.
-            $resultChannel->send(new ExitFailure($exception));
+            $channel->send(new ExitFailure($exception));
         }
     } catch (\Throwable $exception) {
         \trigger_error(\sprintf(
