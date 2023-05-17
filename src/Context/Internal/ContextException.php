@@ -7,6 +7,8 @@ use function Amp\Parallel\Context\formatFlattenedBacktrace;
 
 /**
  * @psalm-import-type FlattenedTrace from ContextPanicError
+ *
+ * @internal
  */
 trait ContextException
 {
@@ -24,26 +26,17 @@ trait ContextException
         ?\Throwable $previous = null,
     ) {
         $format = '%s thrown in context with message "%s" and code "%s" in %s:%d'
-            . '; call %s::getOriginalTrace() for the stack trace in the context as an array;'
-            . ' if the Xdebug extension is enabled, set "xdebug.mode" to "debug" to include'
-            . ' the exception stack trace in the context in the exception message';
+            . "\nStack trace in context:\n%s" ;
 
-        $this->invokeExceptionConstructor(\sprintf(
+        parent::__construct(\sprintf(
             $format,
             $className,
             $originalMessage,
             $originalCode,
             $originalFile,
             $originalLine,
-            self::class,
-        ), $previous);
-    }
-
-    abstract protected function invokeExceptionConstructor(string $message, ?\Throwable $previous): void;
-
-    public function __toString(): string
-    {
-        return \sprintf("%s\nStack trace in context:\n%s", $this->getMessage(), $this->getOriginalTraceAsString());
+            $this->getOriginalTraceAsString(),
+        ), previous: $previous);
     }
 
     /**

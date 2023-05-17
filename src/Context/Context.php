@@ -2,6 +2,7 @@
 
 namespace Amp\Parallel\Context;
 
+use Amp\Cancellation;
 use Amp\Sync\Channel;
 
 /**
@@ -13,10 +14,10 @@ use Amp\Sync\Channel;
 interface Context extends Channel
 {
     /**
-     * @return TResult The data returned from the context.
+     * @return TResult The data returned from the context. This method may be called at any time to await the result or
+     *      an exception will be thrown if the context is closed or throws an exception or exits with a non-zero code.
      *
-     * @throws ContextException If the context dies unexpectedly.
-     * @throws ContextPanicError If the context throws an uncaught exception.
+     * @throws ContextException If the context exited with an uncaught exception or non-zero code.
      */
-    public function join(): mixed;
+    public function join(?Cancellation $cancellation = null): mixed;
 }

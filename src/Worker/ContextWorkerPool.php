@@ -20,7 +20,7 @@ use function Amp\async;
  * tasks simultaneously. The load on each worker is balanced such that tasks
  * are completed as soon as possible and workers are used efficiently.
  */
-final class DefaultWorkerPool implements WorkerPool
+final class ContextWorkerPool implements WorkerPool
 {
     use ForbidCloning;
     use ForbidSerialization;
@@ -35,7 +35,7 @@ final class DefaultWorkerPool implements WorkerPool
     private readonly \SplQueue $idleWorkers;
 
     /** @var \SplQueue<DeferredFuture<Worker|null>> Task submissions awaiting an available worker. */
-    private \SplQueue $waiting;
+    private readonly \SplQueue $waiting;
 
     /** @var \Closure(Worker):void */
     private readonly \Closure $push;
@@ -58,33 +58,26 @@ final class DefaultWorkerPool implements WorkerPool
         private readonly int $limit = self::DEFAULT_WORKER_LIMIT,
         private readonly ?WorkerFactory $factory = null,
     ) {
-        if ($limit < 0) {
-            throw new \Error("Maximum size must be a non-negative integer");
+        if ($limit <= 0) {
+            throw new \ValueError("Maximum size must be a positive integer");
         }
 
-        $this->workers = new \SplObjectStorage();
-        $this->idleWorkers = new \SplQueue();
-        $this->waiting = new \SplQueue();
+        $this->workers = $workers = new \SplObjectStorage();
+        $this->idleWorkers = $idleWorkers = new \SplQueue();
+        $this->waiting = $waiting = new \SplQueue();
 
         $this->deferredCancellation = new DeferredCancellation();
 
-        $workers = $this->workers;
-        $idleWorkers = $this->idleWorkers;
-        $waiting = $this->waiting;
-
+        /** @var \SplObjectStorage<Worker, int> $workers Needed for Psalm. */
         $this->push = static function (Worker $worker) use ($waiting, $workers, $idleWorkers): void {
             if (!$workers->contains($worker)) {
+                // Pool was shutdown, do not re-insert worker into collection.
                 return;
             }
 
-            if ($worker->isRunning()) {
+            if ($waiting->isEmpty()) {
                 $idleWorkers->push($worker);
             } else {
-                $workers->detach($worker);
-                $worker = null;
-            }
-
-            if (!$waiting->isEmpty()) {
                 $waiting->dequeue()->complete($worker);
             }
         };
@@ -117,6 +110,11 @@ final class DefaultWorkerPool implements WorkerPool
         return $this->idleWorkers->count() > 0 || $this->workers->count() < $this->limit;
     }
 
+    /**
+     * Gets the maximum number of workers the pool may spawn to handle concurrent tasks.
+     *
+     * @return int The maximum number of workers.
+     */
     public function getLimit(): int
     {
         return $this->limit;
@@ -147,7 +145,7 @@ final class DefaultWorkerPool implements WorkerPool
             throw $exception;
         }
 
-        $execution->getResult()->finally(static fn () => $push($worker))->ignore();
+        $execution->getFuture()->finally(static fn () => $push($worker))->ignore();
 
         return $execution;
     }

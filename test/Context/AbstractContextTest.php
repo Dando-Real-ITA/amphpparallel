@@ -5,7 +5,6 @@ namespace Amp\Parallel\Test\Context;
 use Amp\CancelledException;
 use Amp\Parallel\Context\Context;
 use Amp\Parallel\Context\ContextException;
-use Amp\Parallel\Context\ContextPanicError;
 use Amp\PHPUnit\AsyncTestCase;
 use Amp\TimeoutCancellation;
 use function Amp\async;
@@ -26,7 +25,7 @@ abstract class AbstractContextTest extends AsyncTestCase
 
     public function testFailingProcess(): void
     {
-        $this->expectException(ContextPanicError::class);
+        $this->expectException(ContextException::class);
         $this->expectExceptionMessage('No string provided');
 
         $context = $this->createContext(__DIR__ . "/Fixtures/test-process.php");
@@ -35,40 +34,36 @@ abstract class AbstractContextTest extends AsyncTestCase
 
     public function testThrowingProcessOnReceive(): void
     {
-        $this->expectException(ContextPanicError::class);
-        $this->expectExceptionMessage('Test message');
+        $this->expectException(ContextException::class);
+        $this->expectExceptionMessage('The context stopped responding');
 
         $context = $this->createContext(__DIR__ . "/Fixtures/throwing-process.php");
 
         $cancellation = new TimeoutCancellation(0.1);
 
-        try {
-            $context->receive($cancellation);
-            self::fail('Receiving should have failed');
-        } catch (ContextException) {
-            $context->join($cancellation);
-        }
+        $context->receive($cancellation);
+
+        self::fail('Receiving should have failed');
     }
 
     public function testThrowingProcessOnSend(): void
     {
-        $this->expectException(ContextPanicError::class);
-        $this->expectExceptionMessage('Test message');
+        $this->expectException(ContextException::class);
 
         $context = $this->createContext(__DIR__ . "/Fixtures/throwing-process.php");
-        delay(1);
+        delay(1); // Give process time to start.
 
-        try {
-            $context->send(1);
-            self::fail('Sending should have failed');
-        } catch (ContextException) {
-            $context->join(new TimeoutCancellation(1));
-        }
+        $context->send(1);
+
+        delay(1); // await TCP RST
+
+        $context->send(1);
+        self::fail('Sending should have failed');
     }
 
     public function testInvalidScriptPath(): void
     {
-        $this->expectException(ContextPanicError::class);
+        $this->expectException(ContextException::class);
         $this->expectExceptionMessage("No script found at '../test-process.php'");
 
         $context = $this->createContext("../test-process.php");
@@ -77,7 +72,7 @@ abstract class AbstractContextTest extends AsyncTestCase
 
     public function testInvalidResult(): void
     {
-        $this->expectException(ContextPanicError::class);
+        $this->expectException(ContextException::class);
         $this->expectExceptionMessage('The given data could not be serialized');
 
         $context = $this->createContext(__DIR__ . "/Fixtures/invalid-result-process.php");
@@ -86,7 +81,7 @@ abstract class AbstractContextTest extends AsyncTestCase
 
     public function testNoCallbackReturned(): void
     {
-        $this->expectException(ContextPanicError::class);
+        $this->expectException(ContextException::class);
         $this->expectExceptionMessage('did not return a callable function');
 
         $context = $this->createContext(__DIR__ . "/Fixtures/no-callback-process.php");
@@ -95,7 +90,7 @@ abstract class AbstractContextTest extends AsyncTestCase
 
     public function testParseError(): void
     {
-        $this->expectException(ContextPanicError::class);
+        $this->expectException(ContextException::class);
         $this->expectExceptionMessage('contains a parse error');
 
         $context = $this->createContext(__DIR__ . "/Fixtures/parse-error-process.inc");
@@ -104,10 +99,10 @@ abstract class AbstractContextTest extends AsyncTestCase
 
     public function testCloseWhenJoining(): void
     {
-        $this->setTimeout(1);
+        $this->setTimeout(3);
 
         $this->expectException(ContextException::class);
-        $this->expectExceptionMessage('Failed to receive result');
+        $this->expectExceptionMessage('Failed to receive result from context');
 
         $context = $this->createContext([
             __DIR__ . "/Fixtures/delayed-process.php",
@@ -125,7 +120,7 @@ abstract class AbstractContextTest extends AsyncTestCase
 
         $context = $this->createContext([__DIR__ . "/Fixtures/sleep-process.php"]);
         $future = async($context->join(...));
-        $context->close();
+        async($context->close(...));
         $future->await();
     }
 
@@ -155,6 +150,8 @@ abstract class AbstractContextTest extends AsyncTestCase
         $context = $this->createContext(__DIR__ . "/Fixtures/exiting-process.php");
         delay(1);
         $context->send(1);
+        delay(1); // Await TCP RST
+        $context->send(1);
     }
 
     public function testCancelJoin(): void
@@ -174,5 +171,24 @@ abstract class AbstractContextTest extends AsyncTestCase
         }
 
         self::assertSame(1, $context->join(new TimeoutCancellation(1)));
+    }
+
+    public function testImmediateJoin(): void
+    {
+        $context = $this->createContext([
+            __DIR__ . "/Fixtures/channel-process.php",
+            1,
+        ]);
+
+        $cancellation = new TimeoutCancellation(1);
+
+        $exitValue = async($context->join(...));
+        $receivedValue = async($context->receive(...));
+
+        $value = 'value';
+        $context->send($value);
+
+        self::assertSame($value, $receivedValue->await($cancellation));
+        self::assertSame($value, $exitValue->await($cancellation));
     }
 }

@@ -6,12 +6,13 @@ use Amp\Cancellation;
 use Amp\ForbidCloning;
 use Amp\ForbidSerialization;
 use Amp\Parallel\Context\ContextFactory;
+use Amp\Parallel\Worker\Internal\ContextWorker;
 use function Amp\Parallel\Context\contextFactory;
 
 /**
  * The built-in worker factory type.
  */
-final class DefaultWorkerFactory implements WorkerFactory
+final class ContextWorkerFactory implements WorkerFactory
 {
     use ForbidCloning;
     use ForbidSerialization;
@@ -39,6 +40,6 @@ final class DefaultWorkerFactory implements WorkerFactory
             $script[] = $this->bootstrapPath;
         }
 
-        return new DefaultWorker(($this->contextFactory ?? contextFactory())->start($script, $cancellation));
+        return new ContextWorker(($this->contextFactory ?? contextFactory())->start($script, $cancellation));
     }
 }
