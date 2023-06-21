@@ -76,7 +76,7 @@ abstract class AbstractPoolTest extends AbstractWorkerTest
 
     public function testBusyPool(): void
     {
-        $pool = $this->createPool(2);
+        $pool = $this->createPool(1);
 
         $values = [42, 56, 72];
         $tasks = \array_map(function (int $value): Task {
@@ -158,7 +158,7 @@ abstract class AbstractPoolTest extends AbstractWorkerTest
         $delay = 0.1;
 
         $this->setMinimumRuntime($delay * $count);
-        $this->setTimeout($delay * $count + $delay);
+        $this->setTimeout($delay * $count * 2);
 
         $pool = $this->createPool(1);
 
