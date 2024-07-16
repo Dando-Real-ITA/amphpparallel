@@ -3,6 +3,8 @@
 namespace Amp\Parallel\Test\Worker;
 
 use Amp\Cancellation;
+use Amp\CancelledException;
+use Amp\DeferredCancellation;
 use Amp\Future;
 use Amp\Parallel\Context\ContextFactory;
 use Amp\Parallel\Context\StatusError;
@@ -134,8 +136,8 @@ abstract class AbstractWorkerTest extends AsyncTestCase
     {
         $worker = $this->createWorker();
 
-        $future = $worker->submit(new Fixtures\TestTask(42))->getFuture();
-        delay(0); // Tick event loop to call Worker::submit()
+        $future = $worker->submit(new Fixtures\TestTask(42, 0.5))->getFuture();
+        delay(0.1); // Tick event loop to call Worker::submit()
         self::assertFalse($worker->isIdle());
         $future->await();
 
@@ -315,7 +317,7 @@ abstract class AbstractWorkerTest extends AsyncTestCase
         $worker = $this->createWorker();
 
         try {
-            $worker->submit(new Fixtures\CancellingTask, new TimeoutCancellation(0.1))->await();
+            $worker->submit(new Fixtures\CancellingTask, new TimeoutCancellation(0.5))->await();
         } finally {
             $worker->shutdown();
         }
@@ -326,7 +328,7 @@ abstract class AbstractWorkerTest extends AsyncTestCase
         $worker = $this->createWorker();
 
         try {
-            $worker->submit(new Fixtures\CancellingTask, new TimeoutCancellation(0.1))->await();
+            $worker->submit(new Fixtures\CancellingTask, new TimeoutCancellation(0.5))->await();
             self::fail(TaskCancelledException::class . ' did not fail submit future');
         } catch (TaskCancelledException $exception) {
             // Task should be cancelled, ignore this exception.
@@ -337,13 +339,29 @@ abstract class AbstractWorkerTest extends AsyncTestCase
         $worker->shutdown();
     }
 
+    public function testCancelBeforeSubmit(): void
+    {
+        $this->expectException(CancelledException::class);
+
+        $worker = $this->createWorker();
+
+        $deferredCancellation = new DeferredCancellation();
+        $deferredCancellation->cancel();
+
+        try {
+            $worker->submit(new Fixtures\CancellingTask, $deferredCancellation->getCancellation())->await();
+        } finally {
+            $worker->shutdown();
+        }
+    }
+
     public function testCancellingCompletedTask(): void
     {
         $worker = $this->createWorker();
 
         self::assertTrue($worker->submit(
             new Fixtures\ConstantTask(),
-            new TimeoutCancellation(0.1),
+            new TimeoutCancellation(0.5),
         )->await());
 
         $worker->shutdown();
