@@ -4,6 +4,7 @@ namespace Amp\Parallel\Context\Internal;
 
 use Amp\Cancellation;
 use Amp\CancelledException;
+use Amp\CompositeCancellation;
 use Amp\ForbidCloning;
 use Amp\ForbidSerialization;
 use Amp\Future;
@@ -11,6 +12,7 @@ use Amp\Parallel\Context\Context;
 use Amp\Parallel\Context\ContextException;
 use Amp\Sync\Channel;
 use Amp\Sync\ChannelException;
+use Amp\TimeoutCancellation;
 use function Amp\async;
 use function Amp\Parallel\Context\flattenArgument;
 
@@ -28,12 +30,24 @@ abstract class AbstractContext implements Context
     /** @var Future<ExitResult<TResult>>|null */
     private ?Future $result = null;
 
+    protected static function makeAcceptCancellation(
+        ?Cancellation $cancellation,
+        float $acceptTimeout,
+    ): Cancellation {
+        $timeoutCancellation = new TimeoutCancellation($acceptTimeout);
+
+        return $cancellation
+            ? new CompositeCancellation($cancellation, $timeoutCancellation)
+            : $timeoutCancellation;
+    }
+
     protected function __construct(
         private readonly Channel $ipcChannel,
         private readonly Channel $resultChannel,
     ) {
     }
 
+    #[\Override]
     public function receive(?Cancellation $cancellation = null): mixed
     {
         try {
@@ -42,7 +56,7 @@ abstract class AbstractContext implements Context
             $this->ipcChannel->close();
 
             throw new ContextException(
-                "The context stopped responding, potentially due to a fatal error or calling exit",
+                "The context stopped responding during receive, potentially due to a fatal error or calling exit",
                 previous: $exception,
             );
         }
@@ -66,6 +80,7 @@ abstract class AbstractContext implements Context
         return $data->getMessage();
     }
 
+    #[\Override]
     public function send(mixed $data): void
     {
         try {
@@ -74,22 +89,25 @@ abstract class AbstractContext implements Context
             $this->ipcChannel->close();
 
             throw new ContextException(
-                "The context stopped responding, potentially due to a fatal error or calling exit",
+                "The context stopped responding during send, potentially due to a fatal error or calling exit",
                 previous: $exception,
             );
         }
     }
 
+    #[\Override]
     public function close(): void
     {
         $this->ipcChannel->close();
     }
 
+    #[\Override]
     public function isClosed(): bool
     {
         return $this->ipcChannel->isClosed();
     }
 
+    #[\Override]
     public function onClose(\Closure $onClose): void
     {
         $this->ipcChannel->onClose($onClose);
@@ -99,7 +117,7 @@ abstract class AbstractContext implements Context
     {
         while ($this->result) {
             try {
-                $this->result->await($cancellation);
+                return $this->result->await($cancellation);
             } catch (CancelledException) {
                 // Ignore cancellation from a prior join request, throw only if this request was cancelled.
                 $cancellation?->throwIfRequested();
